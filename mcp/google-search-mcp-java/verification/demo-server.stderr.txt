@@ -1,0 +1,3 @@
+[server] 模拟搜索 MCP 已启动；等待 stdin 中的 JSON-RPC 消息。
+[server] 收到 initialized 通知，会话可接受工具请求。
+[server] stdin 已关闭，服务端退出。

@@ -1,0 +1,6 @@
+# 将路径替换为你解压后JAR的真实绝对路径。
+# 若java不在Codex进程的PATH中，把command改为java.exe的绝对路径。
+# 用于服务端的是demo.McpServer（JAR的Main-Class），不要配置McpClientDemo。
+[mcp_servers.mock_google]
+command = "java"
+args = ["-jar", "D:/mcp-demo/google-search-mcp-java/dist/mock-google-mcp.jar"]

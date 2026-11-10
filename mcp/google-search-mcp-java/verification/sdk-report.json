@@ -1,0 +1,50 @@
+{
+  "kind": "official Python MCP SDK interoperability smoke test",
+  "generated_at": "2026-11-10T03:28:56.691718+00:00",
+  "sdk_package": "mcp",
+  "sdk_version": "1.29.0",
+  "python_version": "3.12.14",
+  "command": [
+    "java",
+    "-cp",
+    "dist/mock-google-mcp.jar",
+    "demo.McpServer"
+  ],
+  "total": 7,
+  "passed": 7,
+  "failed": 0,
+  "checks": [
+    {
+      "name": "official SDK negotiates 2025-06-18",
+      "status": "PASS",
+      "detail": {
+        "selected_protocol_version": "2025-06-18"
+      }
+    },
+    {
+      "name": "official SDK discovers google_search",
+      "status": "PASS"
+    },
+    {
+      "name": "official SDK calls discovered tool with Chinese query",
+      "status": "PASS"
+    },
+    {
+      "name": "official SDK reads matching text and structured content",
+      "status": "PASS"
+    },
+    {
+      "name": "official SDK accepts successful empty result",
+      "status": "PASS"
+    },
+    {
+      "name": "official SDK receives tool execution error",
+      "status": "PASS"
+    },
+    {
+      "name": "official SDK context managers close the stdio session",
+      "status": "PASS"
+    }
+  ],
+  "scope": "Official SDK client to the Java teaching server over real stdio; not Codex end-to-end validation."
+}

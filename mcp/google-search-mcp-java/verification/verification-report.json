@@ -1,0 +1,179 @@
+{
+  "kind": "black-box teaching-subset verification",
+  "generated_at": "2026-11-10T03:28:56.735164+00:00",
+  "protocol_version": "2025-06-18",
+  "request_timeout_seconds": 3.0,
+  "command": [
+    "java",
+    "-cp",
+    "dist/mock-google-mcp.jar",
+    "demo.McpServer"
+  ],
+  "python_version": "3.12.14",
+  "total": 32,
+  "passed": 32,
+  "failed": 0,
+  "checks": [
+    {
+      "name": "tool listing before initialization is rejected",
+      "status": "PASS",
+      "duration_ms": 40.17
+    },
+    {
+      "name": "initialize returns selected version and tools capability",
+      "status": "PASS",
+      "duration_ms": 0.62
+    },
+    {
+      "name": "tool calls before initialized notification are rejected",
+      "status": "PASS",
+      "duration_ms": 0.64
+    },
+    {
+      "name": "initialized is a notification with no response",
+      "status": "PASS",
+      "duration_ms": 150.2
+    },
+    {
+      "name": "tools/list exposes callable name and parameter schema",
+      "status": "PASS",
+      "duration_ms": 0.73
+    },
+    {
+      "name": "mock search returns two results from three matches",
+      "status": "PASS",
+      "duration_ms": 16.92
+    },
+    {
+      "name": "omitted limit uses default 3",
+      "status": "PASS",
+      "duration_ms": 1.04
+    },
+    {
+      "name": "zero matches is a successful empty result",
+      "status": "PASS",
+      "duration_ms": 0.52
+    },
+    {
+      "name": "invalid arguments: missing query",
+      "status": "PASS",
+      "duration_ms": 0.92
+    },
+    {
+      "name": "invalid arguments: empty query",
+      "status": "PASS",
+      "duration_ms": 0.28
+    },
+    {
+      "name": "invalid arguments: whitespace query",
+      "status": "PASS",
+      "duration_ms": 0.25
+    },
+    {
+      "name": "invalid arguments: numeric query",
+      "status": "PASS",
+      "duration_ms": 2.67
+    },
+    {
+      "name": "invalid arguments: null query",
+      "status": "PASS",
+      "duration_ms": 0.35
+    },
+    {
+      "name": "invalid arguments: limit below range",
+      "status": "PASS",
+      "duration_ms": 0.25
+    },
+    {
+      "name": "invalid arguments: limit above range",
+      "status": "PASS",
+      "duration_ms": 0.32
+    },
+    {
+      "name": "invalid arguments: boolean limit",
+      "status": "PASS",
+      "duration_ms": 0.32
+    },
+    {
+      "name": "invalid arguments: fractional limit",
+      "status": "PASS",
+      "duration_ms": 5.55
+    },
+    {
+      "name": "invalid arguments: string limit",
+      "status": "PASS",
+      "duration_ms": 0.37
+    },
+    {
+      "name": "invalid arguments: null limit",
+      "status": "PASS",
+      "duration_ms": 0.29
+    },
+    {
+      "name": "invalid arguments: unexpected argument",
+      "status": "PASS",
+      "duration_ms": 0.28
+    },
+    {
+      "name": "invalid arguments: arguments array",
+      "status": "PASS",
+      "duration_ms": 0.24
+    },
+    {
+      "name": "unknown MCP method returns -32601",
+      "status": "PASS",
+      "duration_ms": 0.81
+    },
+    {
+      "name": "unknown tool returns -32602",
+      "status": "PASS",
+      "duration_ms": 0.27
+    },
+    {
+      "name": "mock upstream failure returns result.isError",
+      "status": "PASS",
+      "duration_ms": 2.99
+    },
+    {
+      "name": "malformed JSON returns -32700",
+      "status": "PASS",
+      "duration_ms": 4.42
+    },
+    {
+      "name": "invalid JSON-RPC envelope returns -32600",
+      "status": "PASS",
+      "duration_ms": 0.24
+    },
+    {
+      "name": "UTF-8 string request id is preserved",
+      "status": "PASS",
+      "duration_ms": 0.66
+    },
+    {
+      "name": "Chinese quotes backslash and newline round-trip",
+      "status": "PASS",
+      "duration_ms": 0.6
+    },
+    {
+      "name": "main session EOF exits and logs stay on stderr",
+      "status": "PASS",
+      "duration_ms": 3.23
+    },
+    {
+      "name": "unsupported requested version selects server supported version",
+      "status": "PASS",
+      "duration_ms": 183.7
+    },
+    {
+      "name": "negotiated session can discover tools",
+      "status": "PASS",
+      "duration_ms": 0.96
+    },
+    {
+      "name": "version session EOF exits cleanly",
+      "status": "PASS",
+      "duration_ms": 2.41
+    }
+  ],
+  "scope": "Real child-process stdin/stdout; mock search only; not full MCP conformance."
+}
