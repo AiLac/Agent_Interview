@@ -1,0 +1,20 @@
+[
+  {
+    "query": "安静",
+    "actions": [
+      {"kind": "call", "id": "c1", "name": "search_places", "arguments": "{\"query\":\"安静\",\"limit\":1}"},
+      {"kind": "final", "text": "已查询"}
+    ],
+    "expected_observations": [{"ok": true, "items": ["青禾自习室"]}],
+    "expected_answer": "已查询"
+  },
+  {
+    "query": "未知工具",
+    "actions": [
+      {"kind": "call", "id": "c2", "name": "missing", "arguments": "{}"},
+      {"kind": "final", "text": "查询失败"}
+    ],
+    "expected_observations": [{"ok": false, "error": "unknown_tool"}],
+    "expected_answer": "查询失败"
+  }
+]

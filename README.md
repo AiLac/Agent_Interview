@@ -3,3 +3,5 @@
 - [MCP](mcp/)
   - [MCP 工具发现与调用（模拟 Google 查询）](mcp/mcp%20demo实践/README.md)
   - [MCP 与 Skill 比较](mcp/mcp与skill比较/README.md)
+- [Python](python/)
+  - [Java 开发者的 Agent Python 课（6–8 小时）](python/README.md)
