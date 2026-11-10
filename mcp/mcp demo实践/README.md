@@ -30,7 +30,7 @@
 如果当前位于仓库根目录，先进入本模块：
 
 ```powershell
-cd mcp/google-search-mcp-java
+cd "mcp/mcp demo实践"
 ```
 
 随后在本模块目录运行：
@@ -601,14 +601,14 @@ java -cp dist/mock-google-mcp.jar demo.McpClientDemo 'Java 虚拟线程' 2
 
 ## 12. 接入 Codex
 
-先确认JAR实际路径，例如`D:/projects/Agent_Interview/mcp/google-search-mcp-java/dist/mock-google-mcp.jar`。
+先确认JAR实际路径，例如`D:/projects/Agent_Interview/mcp/mcp demo实践/dist/mock-google-mcp.jar`。
 
 把`codex-config.example.toml`中的示例路径改为实际绝对路径，再将对应配置合并到`~/.codex/config.toml`：
 
 ```toml
 [mcp_servers.mock_google]
 command = "java"
-args = ["-jar", "D:/projects/Agent_Interview/mcp/google-search-mcp-java/dist/mock-google-mcp.jar"]
+args = ["-jar", "D:/projects/Agent_Interview/mcp/mcp demo实践/dist/mock-google-mcp.jar"]
 ```
 
 重新启动Codex后用`/mcp`检查服务，再要求模型：
@@ -647,7 +647,7 @@ python verify.py
 python verify_sdk.py
 ```
 
-上述记录来自教学工程交付时的实际运行：Linux、OpenJDK 21.0.13、Python 3.12.14。编译采用 Java 17 语言与目标字节码；没有在 Java 17 运行时或 Windows 上实测。本次 README 整合只修改文档，没有重新运行这些程序检查，也没有把历史结果当作新的验证结果。
+上述记录来自教学工程交付时的实际运行：Linux、OpenJDK 21.0.13、Python 3.12.14。编译采用 Java 17 语言与目标字节码；没有在 Java 17 运行时或 Windows 上实测。
 
 实现范围为单工具、顺序请求、stdio 通信。HTTP、鉴权、分页、并发、取消、动态工具变化、resources、prompts、sampling 均未实现；通过现有检查不代表完整 MCP 规范认证。
 
