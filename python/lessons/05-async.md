@@ -1,73 +1,144 @@
-# 第 5 小时 · 并发等待两个来源，为每个来源设超时
+# 第 5 小时 · 一个线程怎样同时等待两份查询
 
-**本节产物**是 `lookup_sources(query, sources, *, timeout_s)`。同一查询同时访问目录和笔记。目录慢或超时时，调用者仍能看到笔记来源返回了什么。样本用 `asyncio.sleep` 模拟 I/O 等待，所有结果来自本地内存。
+现在给地点工具加一个来源。目录里有「青禾自习室、北岸图书馆」，笔记里有「青禾自习室、东桥阅览室」。两份查询相互独立。如果目录请求要等一秒才有响应，程序能否利用这一秒把笔记请求也发出去？要回答它，先分清三件事：创建一次查询、让查询开始运行、等待它的结果。
 
-## 0–15 分钟 · 看清启动与等待的区别
+## 调用异步函数时，函数体还没开始
 
 ```python
 import asyncio
 
-async def one():
-    print("开始查")
+async def search():
+    print("进入查询")
     await asyncio.sleep(0)
-    return ["A"]
+    return ["青禾自习室"]
 
 async def main():
-    pending = one()
-    print("已创建")
-    print(await pending)
+    pending = search()
+    print("拿到协程对象")
+    names = await pending
+    print(names)
 
 asyncio.run(main())
 ```
 
-顺序是「已创建」「开始查」「['A']」。调用协程函数先得到一个协程对象；这次 `await pending` 才让它运行。对照 Java，`CompletableFuture.supplyAsync(...)` 会提交任务，单独调用 `one()` 没有提交操作。事件循环驱动任务在等待点暂停与恢复。`async def` 中直接调用阻塞 HTTP 客户端或 `time.sleep` 会占住事件循环线程；替换外部服务时应选异步客户端，或把合适的同步 I/O 交给 `asyncio.to_thread`。
+```text
+拿到协程对象
+进入查询
+['青禾自习室']
+```
 
-## 15–29 分钟 · 由串行写法推导并发写法
+`async def` 定义协程函数；调用 `search()` 得到**协程对象**，它保留了这次调用要执行什么。`asyncio.run(main())` 启动**事件循环**，也就是不断挑选就绪任务、在等待完成后恢复它们的调度程序。执行到 `await pending` 时，当前任务开始驱动查询，并等它交回值。如果内部遇到尚未完成的异步等待，当前任务可以挂起，循环便有机会运行其他就绪任务。一个已经准备好的结果也可能直接返回，所以单单数一段代码里有几个 `await`，推断不出并发度。
 
-先运行第一种写法，再运行第二种，比较输出。把两次等待都放入 `main` 中，并用 `asyncio.run(main())` 启动。
+在 Java 里，调用 `CompletableFuture.supplyAsync(...)` 通常已经提交了工作。这里单写一行 `pending = search()` 只创建协程对象。如果既不等待也不调度它，函数体里的打印不会出现。
+
+## 把两个请求交给同一个事件循环
+
+下面故意让目录等待笔记发出信号。`asyncio.Event` 是一个最初未置位的信号，`wait()` 等它，`set()` 唤醒等待者。这个小实验用先后关系证明并发，比比较两次只有几毫秒差异的计时更容易看清。
 
 ```python
 import asyncio
-from agent_lab.advanced import catalog, notes
 
 async def main():
-    a = await catalog("安静")
-    b = await notes("安静")
-    print(a, b)
-    both = await asyncio.gather(catalog("安静"), notes("安静"))
-    print(both)
+    note_started = asyncio.Event()
+
+    async def catalog():
+        print("目录开始，等待信号")
+        await note_started.wait()
+        print("目录恢复")
+        return "目录结果"
+
+    async def notes():
+        print("笔记开始，发信号")
+        note_started.set()
+        return "笔记结果"
+
+    results = await asyncio.gather(catalog(), notes())
+    print(results)
 
 asyncio.run(main())
 ```
 
-第一段要等目录返回才创建并等待笔记查询；第二段将两个协程交给 `gather` 调度。两者都得到目录、笔记两份结果。`gather` 的结果按传入顺序排列，即使笔记先结束，它也在第二个位置。观察耗时可以用 `time.perf_counter()`，本机计时会波动。[检查器](../check.py) 使用 `asyncio.Event` 证明真的发生并发：第一个来源必须等第二个来源发信号才能返回。串行实现会让第一个来源一直等到超时。
+```text
+目录开始，等待信号
+笔记开始，发信号
+目录恢复
+['目录结果', '笔记结果']
+```
 
-## 29–49 分钟 · 完成带来源信息的查询
+`gather` 接收两个协程并安排它们运行。目录在 `wait` 处暂停，事件循环所在的线程于是可以进入笔记函数。笔记完成后目录才恢复；最后的列表仍按传入 `gather` 的顺序排列。如果改写为 `a = await catalog()`、`b = await notes()`，第一次等待就永远等不到信号，程序没有机会进入第二行。第一个实验中有 `await`，第二个实验也有，真正改变行为的是两个任务何时被安排运行。
 
-`Source = Callable[[str], Awaitable[list[str]]]` 表示调用来源得到可等待对象，等待完成才得到名称列表。按下面的值形状实现 [practice.py](../practice.py) 中的 `lookup_sources`，需要自己 `import asyncio`。
+## 如果已有的客户端是同步的
 
-1. 写一个内部协程 `one(name, source)`，用 `await asyncio.wait_for(source(query), timeout=timeout_s)` 等待。内部函数可以直接读外层的 `query` 和 `timeout_s`，这种绑定称为闭包。
-2. 正常时返回 `{"source": name, "ok": True, "items": items}`。捕获 `TimeoutError` 返回 `{"source": name, "ok": False, "error": "timeout"}`。超时在各来源内部转换成数据；其他意外异常仍向外传播。
-3. 遍历 `sources.items()` 建立协程列表 `jobs`，然后 `return await asyncio.gather(*jobs)`。调用端 `*jobs` 把一个列表展开为多个位置实参。空输入应得到 `[]`。
-4. 运行 `python check.py 5`。再读参考实现最后一行，它把“建列表再展开”写成生成器表达式配合 `*`，调用含义一致。
+假设已有 Java 风格的同步客户端，调用 `sync_search(query)` 会一直等到结果返回。直接在事件循环线程中调用时，这个线程会卡在函数内部，无法继续调度笔记查询。把 `await` 加在这个同步调用前也无法解决，因为 Python 先求出右边调用的结果，才尝试等待它。
 
-## 49–60 分钟 · 制造一个永远等不到的来源
+下面用 `time.sleep` 模拟阻塞 I/O。`asyncio.to_thread` 接收**函数和实参**，让线程池里的工作线程替事件循环调用它。用线程标识验证两处代码运行在哪里，不用猜哪个系统线程叫哪个名字。
 
 ```python
 import asyncio
-from practice import lookup_sources
-from agent_lab.advanced import notes
+import threading
+import time
+
+def sync_search(query):
+    time.sleep(0.01)
+    return query, threading.get_ident()
+
+async def main():
+    loop_thread = threading.get_ident()
+    query, worker_thread = await asyncio.to_thread(sync_search, "安静")
+    print(query, loop_thread == worker_thread)
+
+asyncio.run(main())
+```
+
+```text
+安静 False
+```
+
+这里的**工作线程**就是线程池拿来执行 `sync_search` 的另一个线程。如果写成 `to_thread(sync_search("安静"))`，内层调用会先在事件循环线程执行。若客户端本身已经提供异步查询，则让协程 `await` 它即可。两个来源并发等待 I/O 时，一条事件循环线程就足以管理它们，无须为每个异步请求单独分配线程。
+
+把上面的阻塞调用放回双来源查询，会出现下图的时序。图中的笔记任务已经被调度。工作线程处理目录查询期间，事件循环线程可以推进笔记任务。图示只给出一种可能的完成顺序。
+
+```mermaid
+sequenceDiagram
+    participant L as 事件循环线程
+    participant W as 工作线程
+    participant D as 目录服务
+    participant N as 笔记服务
+    L->>W: 提交同步的目录查询
+    W->>D: 发送请求并阻塞等待
+    L->>N: 从另一任务发出异步请求
+    N-->>L: 笔记响应就绪
+    D-->>W: 目录响应就绪
+    W-->>L: 交回同步函数的结果
+```
+
+## 一个来源超时，另一份结果归谁
+
+课程中的 `lookup_sources` 包装每个查询，并在单个来源内部执行 `await asyncio.wait_for(source(query), timeout=timeout_s)`。这样捕获 `TimeoutError` 时，还知道到底哪个来源超时。下面把一个永远没有信号的来源和一个立即返回的来源放在一起。
+
+```python
+import asyncio
+from agent_lab.advanced import lookup_sources
 
 async def stalled(query):
     await asyncio.Event().wait()
 
+async def available(query):
+    return [query]
+
 async def main():
-    rows = await lookup_sources("安静", {"慢源": stalled, "笔记": notes}, timeout_s=0.1)
-    print([(row["source"], row["ok"]) for row in rows])
+    rows = await lookup_sources("安静", {"目录": stalled, "笔记": available}, timeout_s=0.05)
+    for row in rows:
+        print(row)
 
 asyncio.run(main())
 ```
 
-预期为 `[('慢源', False), ('笔记', True)]`。本例的超时针对单个来源。到期后 `wait_for` 请求取消并等待取消过程，真实耗时可能超过传入秒数。`gather` 默认会把未被捕获的异常交给等待者，其他已调度任务通常仍会继续；这里的部分成功仅针对显式处理的超时。把 `await` 写在循环里再收集“结果”，即使最后使用了 `gather` 也无法补回失去的并发。
+```text
+{'source': '目录', 'ok': False, 'error': 'timeout'}
+{'source': '笔记', 'ok': True, 'items': ['安静']}
+```
 
-[参考实现 · lookup_sources](../agent_lab/advanced.py) · [Python 3.12 · 协程、并发和超时](https://docs.python.org/zh-cn/3.12/library/asyncio-task.html)
+来源超时时 `wait_for` 会请求取消并等待取消完成，实际耗时可以超过 `timeout_s`。代码只把预期的超时转成来源记录。如果发生其他未捕获异常，默认的 `gather` 会向等待者抛出它。第 5 课的检查器也用信号构造了一个反例，串行实现会使本来可以成功的来源超时。[并发与超时文档](https://docs.python.org/zh-cn/3.12/library/asyncio-task.html)
+
+在 `practice.py` 实现 `lookup_sources`，记得导入 `asyncio`。先把每个来源的协程收进 `jobs` 列表，再用 `await asyncio.gather(*jobs)`；调用端的星号将列表展开为多个位置实参。空来源应返回空列表。执行 `python check.py 5`。现在内部能并发查询了，但终端仍需等整次调用结束。下一课让调用者在结果到来前就看见一次调用的开始。[练习文件](../practice.py) · [异步工具源码](../agent_lab/advanced.py) · [下一课：流式事件](06-stream.md)

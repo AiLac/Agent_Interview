@@ -1,62 +1,84 @@
-# 第 7 小时 · 遇到 @tool 时，追踪它包装了什么
+# 第 7 小时 · 工具多了一层日志，原函数去了哪里
 
-**选修，可在第 6 小时后单独学习。** 本节实现 `@observe(log)`，在保留同步函数调用方式的同时记录正常返回或抛错。这个例子能帮你读框架的装饰器；各个 SDK 的 `@tool` 具体返回什么对象，需要看该 SDK 的实现。
+假设你想知道 Agent 到底调用过哪些工具。最直接的做法，是在每个函数里加一条日志。可这十几个工具真正共有的事情只有两件：接收一组参数、返回结果或抛出异常。能不能把记录写在它们的调用路径上，只写一次？
 
-## 0–15 分钟 · 把 @ 还原成普通赋值
+Python 的**装饰器**接收一个对象，并返回此后交给调用者使用的对象。对于这节课的同步工具，它接收原函数，返回一个负责写日志的包装函数。先不看 `@`，用普通的赋值跟一次调用。
+
+## 函数在什么时候被替换
 
 ```python
+from agent_lab.core import dispatch
+from agent_lab.extra import observe
+
+log = []
+decorate = observe(log)
+tracked = decorate(dispatch)
+print(log)
+
+result = tracked("missing", "{}")
+print(result)
+print(log)
+```
+
+```text
+[]
+{'ok': False, 'error': 'unknown_tool'}
+[{'fn': 'dispatch', 'status': 'returned'}]
+```
+
+`observe(log)` 接收日志列表，返回函数 `decorate`。`decorate(dispatch)` 把原函数交给它，得到包装函数 `tracked`。到此日志仍然是空的，因为两次调用做的事只是准备一个新函数。最后一行真正调用 `tracked(...)` 时，包装器才接到工具名和参数，执行原函数，把状态写回最初的那个列表。
+
+为什么 `observe` 早已返回，`tracked` 仍找得到 `log`？在 Python 中，内层函数可以在以后被调用时继续访问外层的变量，这种函数连同它能访问的这些绑定称为**闭包**。分别用两个列表调用 `observe`，会得到各自向不同列表写记录的装饰器。你也可以把 `tracked` 作为 `run_agent` 的 `tool` 参数传入，让整个运行器经过这层包装。
+
+## 用 @ 写出同一件事
+
+```python
+from inspect import signature
 from agent_lab.extra import observe
 
 records = []
 
 @observe(records)
-def count_names(names, *, limit=2):
-    """统计展示的名称。"""
-    return len(names[:limit])
+def names(query, *, limit=1):
+    """按上限重复名称。"""
+    return [query] * limit
 
-print(records)
-print(count_names(["A", "B"], limit=1))
+print(names("青禾", limit=2))
+print(names.__name__, names.__doc__)
+print(signature(names))
 print(records)
 ```
 
-依次得到空列表、数字 1、一条 `status="returned"` 的记录。可以把定义读成两步：先定义原函数，再执行 `count_names = observe(records)(count_names)`。第一层接收日志容器，第二层接收待包装函数。调用者后来写 `count_names(...)` 时才进入第三层 wrapper。它仍能读到外层的 `records` 与原函数，因为闭包保存了这些绑定。Java 中可以用高阶函数或代理去理解调用前后加行为；这里的替换发生在 Python 执行函数定义时。
-
-## 15–28 分钟 · 辨认星号所在的位置
-
-| 表达式 | 谁处理参数 | 结果 |
-| --- | --- | --- |
-| 定义端 `def f(*args, **kwargs)` | 被调用函数 | 多余位置实参收为元组，关键字实参收为字典 |
-| 调用端 `func(*args, **kwargs)` | 包装器调用原函数 | 把元组和字典再次展开 |
-| 定义端 `def f(q, *, limit=2)` | 被调用函数 | 要求 limit 通过关键字传入 |
-| 定义端 `def f(q, /)` | 被调用函数 | q 只允许按位置传入，读第三方签名时会见到 |
-
-试把 `func(*args, **kwargs)` 改成 `func(args, kwargs)`：原函数将得到两个位置参数，本应传给 `limit` 的关键字丢失。再看 `from functools import wraps`。在 wrapper 上写 `@wraps(func)` 会保留名称、文档字符串等元数据，并给出 `__wrapped__` 链接。这对读取函数签名或帮助文本的工具框架很有用。
-
-## 28–48 分钟 · 完成包装器
-
-在 [practice.py](../practice.py) 补上 import 并实现 `observe(log)`。普通返回时追加 `{"fn": 原函数名, "status": "returned"}`，原样返回原结果。发生普通异常时记录异常类型名，例如 `{"fn":"broken","status":"raised","error":"ValueError"}`，然后用裸 `raise` 重新抛出。这样调用者还能根据异常类型和原 traceback 排查故障。最外层返回装饰器，装饰器返回包装后的函数。
-
-```bash
-python check.py 7
+```text
+['青禾', '青禾']
+names 按上限重复名称。
+(query, *, limit=1)
+[{'fn': 'names', 'status': 'returned'}]
 ```
 
-再用自己写的版本包装实际工具，验证 `ok=False` 的业务结果与 Python 异常的区别：
+可以把 `@observe(records)` 展开成定义原函数之后的一次赋值：`names = observe(records)(names)`。此后 `names(...)` 进入包装器。源码上的 `@wraps(func)` 复制了原函数的名称与文档字符串，并设置 `__wrapped__` 指回原函数，这也是 `inspect.signature` 默认能找到原签名的原因。读到真实 SDK 的 `@tool` 时，也可以沿这条线去看装饰器具体返回了函数还是工具对象。[包装器源码](../agent_lab/extra.py)
+
+## 原来的实参如何穿过包装器
+
+调用者传入一个位置参数 `"青禾"` 和一个关键字参数 `limit=2`。包装器定义里的 `*args` 把位置参数收成元组 `("青禾",)`，`**kwargs` 把关键字收成字典 `{"limit": 2}`。在调用端写 `func(*args, **kwargs)`，Python 再把二者展开，原函数看见的调用形状与最初相同。若写成 `func(args, kwargs)`，原函数会收到两个位置参数，而 `limit` 只接受关键字传参。
+
+遇到复杂签名时，可以用一个短函数观察自己的参数。元组末尾的逗号表示这是单元素元组；空元组写作 `()`。第三方签名里若出现独立的 `/`，其左边的形参仅接受位置实参，与 `*` 右边的仅关键字规则相对应。
 
 ```python
-from agent_lab.core import dispatch, run_agent
-from practice import observe
+def inspect_call(*args, **kwargs):
+    print(args)
+    print(kwargs)
 
-log = []
-tracked = observe(log)(dispatch)
-print(tracked("missing", "{}"))
-print(run_agent("安静", tool=tracked))
-print(log)
+inspect_call("青禾", limit=2)
 ```
 
-两次调用都应记录 `returned`。第一次虽然是未知工具，`dispatch` 正常返回了一个错误字典。若日志要统计业务成功率，应额外读取返回对象里的 `ok`，而非把所有正常返回都当成成功。
+```text
+('青禾',)
+{'limit': 2}
+```
 
-## 48–60 分钟 · 对照 SDK 源码的阅读方法
+## 为什么报错的工具也可能记录 returned
 
-拿一个已经装饰过的工具，打印 `tracked.__name__`、`tracked.__wrapped__.__name__`，再用 `inspect.signature(tracked)` 查看签名。暂时去掉 `@wraps`，重复观察。最后推测同步装饰器包住 `async def` 时何时写日志：它一拿到协程对象就会记录返回，真正的异步异常尚未发生。要观察异步执行，应让包装器也使用 `async def` 并在 `try` 里 `await func(...)`。本节的可运行装饰器用于同步工具。
+回看开头：`dispatch` 查不到工具，按约定**正常返回**一个 `ok=False` 的字典。因此包装器记录 `returned`。如果函数真的执行了 `raise ValueError(...)`，包装器才会记录 `raised`，并用无参数的 `raise` 把原来的异常继续向外传。一个指标统计 Python 调用是否抛错，另一个指标统计业务查询是否成功；它们读的是不同的数据。
 
-[参考实现 · observe](../agent_lab/extra.py) · [标准库 · functools.wraps](https://docs.python.org/zh-cn/3.12/library/functools.html#functools.wraps)
+在 `practice.py` 完成 `observe`，导入 `functools.wraps`，运行 `python check.py 7`。把示例的函数改成抛出 `ValueError("bad")`，在调用方用 `try/except` 打印 `records`，你应看到 `error` 等于 `ValueError`。再想一下把这个同步包装器用到 `async def` 的后果：包装器拿到协程对象就会写下 `returned`，真正执行期间的异常会发生得更晚。如果目标是记录异步执行结果，包装器也需要在异常处理范围内 `await` 原函数。[练习文件](../practice.py) · [下一课：回放测试](08-replay.md)

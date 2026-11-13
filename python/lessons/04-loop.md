@@ -1,64 +1,85 @@
-# 第 4 小时 · 用一段循环把工具结果交回模型
+# 第 4 小时 · 为什么只问了一次，模型却运行两轮
 
-**本节产物**是一个同步的、可替换模型和工具的 Agent 循环。只完成前四小时，你就应能独立解释：为什么用户只发了一条消息，模型却被调用两次？
+试着把调试器停在 `result = tool(...)` 之后。此时 Python 已经拿到了「青禾自习室」和「北岸图书馆」，用户的屏幕上却一个字也没有。还缺哪一步？把断点向后移一行，就能看到答案：工具把结果交还给调用它的运行器，运行器还要把这个结果放进模型能读到的历史。
 
-## 0–12 分钟 · 在纸上画出第二次模型调用的输入
+## 展开第一次工具调用
 
-在 [core.py](../agent_lab/core.py) 里从 `run_agent` 开始。初始历史只有 `{"role": "user", "content": "安静"}`。模型替身 `demo_model` 看到最后一条来自 user，就返回一个 `kind="call"` 的动作，其中包括工具名、参数文本和 ID。程序执行工具，再把助手动作和工具观察加入历史。第二轮模型能读取实际结果，从中拼出回答。
+这段脚本暂时把循环拆开，用源码里的四个函数手工执行一轮。可以在每一行后检查 `history`。
 
-| 时刻 | 历史角色顺序 | 本次由谁产生什么 |
-| --- | --- | --- |
-| 第一轮开始 | user | 模型产生 `call`，ID 为 `c1` |
-| 工具执行后 | user、assistant、tool | 运行器保存调用，再保存带有 `call_id="c1"` 的观察 |
-| 第二轮开始 | user、assistant、tool | 模型读观察，返回 `kind="final"` |
+```python
+from agent_lab.core import demo_model, dispatch, make_message, record_call
 
-动作 ID 和工具名各有作用。若模型连续两次请求同一工具，只靠工具名难以区分每个结果属于哪次调用。真实 SDK 在何处携带 ID 取决于协议；本练习明确把它存在 tool 消息中。
+history = [make_message("user", "安静")]
+action = demo_model(history)
+result = dispatch(action["name"], action["arguments"])
+print(len(history), result)
+
+record_call(history, action, result)
+for message in history:
+    print(message)
+
+print(demo_model(history))
+```
+
+```text
+1 {'ok': True, 'items': ['青禾自习室', '北岸图书馆']}
+{'role': 'user', 'content': '安静'}
+{'role': 'assistant', 'call': {'kind': 'call', 'id': 'c1', 'name': 'search_places', 'arguments': '{"query": "安静"}'}}
+{'role': 'tool', 'call_id': 'c1', 'content': '{"ok": true, "items": ["青禾自习室", "北岸图书馆"]}'}
+{'kind': 'final', 'text': '青禾自习室、北岸图书馆'}
+```
+
+留意第一行的 `1`。工具已经返回，历史里仍只有最初的用户消息。`record_call` 第一次追加记录“助手请求查地点”，第二次追加记录“工具返回这两个地点”。前者用 `id`，后者用 `call_id`，值同为 `c1`。一个工具可以被连续调用两次，名称相同，ID 可以把每份结果对回自己的请求。
+
+工具消息的 `content` 里出现了小写 `true`。在工具刚返回时它是 Python 字典里的 `True`，写入历史时运行器用 `json.dumps` 把整个结果编码成文本。第二次执行 `demo_model(history)` 时，它看见末项来自工具，用 `json.loads` 读取结果，再把地点名用顿号连接。这样就能指出一条完整的因果关系：本例的最终文本取决于第二轮模型输入中的那一条工具消息。
+
+## 把两次模型调用折回一个循环
+
+`run_agent` 收到用户输入后反复调用 `model(history)`。这里的 `model` 是一个可以被调用的对象。源码把它的形状写为 `Callable[[list[dict]], dict]`。从里向外读，输入是一个由字典组成的列表，返回一个动作字典。熟悉 Java 的读者可以把它当作参数为 History、返回值为 Action 的函数式接口。这里的 **回调** 就是调用者传进函数，运行器在需要模型决策时再调用它。
 
 ```mermaid
 flowchart TD
-    A["构造 user 消息"] --> B{"还有模型轮数？"}
-    B -->|有| C["模型读取历史"]
-    B -->|无| X["抛出轮数耗尽错误"]
-    C --> D{"动作类型"}
-    D -->|call| E["运行工具并追加调用与观察"]
+    A["历史含一条用户消息"] --> B{"还有模型轮数？"}
+    B -->|有| C["模型读取当前历史"]
+    B -->|无| X["抛出 RuntimeError"]
+    C --> D{"返回哪种动作？"}
+    D -->|call| E["执行工具，追加调用和结果"]
     E --> B
     D -->|final| F["返回回答"]
-    D -->|未知| G["抛出动作错误"]
+    D -->|其他| G["抛出 ValueError"]
 ```
 
-## 12–27 分钟 · 从签名推断执行者
+图里有两种正常动作。`call` 让程序做事并回到循环开头；`final` 让程序交出文本并结束函数。Python 的 `return` 会直接退出整个函数，所以模型第一轮就回答时，工具一次也不会运行。`for _ in range(max_steps)` 只做有限次尝试，`_` 是习惯写法，表示这里用不到循环序号。
 
-读 `Model = Callable[[list[dict]], dict]`：调用者传一个消息列表，模型返回一个动作字典。两层方括号中，内层描述参数序列，最后的 `dict` 描述返回值。可把它理解为 Java 中一个接收消息列表、返回 Action 的函数式接口。`model(history)` 执行实际传进来的对象，入口没传参就使用默认的 `demo_model`。同理，`tool(name, raw)` 的实现也能替换。
+## 少给一轮，已经执行过的工具会怎样
 
-做一个实验，只替换模型，其他部分复用现成代码：
+下面用一个普通函数在真实执行之前记录工具名，再把它传给 `run_agent`。这种把具体依赖作为参数传入的写法，让我们能够观察调用次数。
 
 ```python
-from agent_lab.core import run_agent
+from agent_lab.core import dispatch, run_agent
 
-def answer_now(history):
-    return {"kind": "final", "text": f"收到 {len(history)} 条消息"}
+calls = []
 
-print(run_agent("你好", model=answer_now))
+def counted_tool(name, raw):
+    calls.append(name)
+    return dispatch(name, raw)
+
+try:
+    run_agent("安静", tool=counted_tool, max_steps=1)
+except RuntimeError as error:
+    print(error)
+print(calls)
 ```
 
-输出为 `收到 1 条消息`。此时工具没有执行。把 `answer_now` 改成总返回 `call`，并加上 `max_steps=2`，如果模型一直申请调用，程序最多执行两次工具，然后在循环尾抛错。这里的预算计量单位是**模型决策轮数**；一轮用来执行工具后，还需要一轮才能生成 final。
-
-## 27–48 分钟 · 实现主循环
-
-在 [practice.py](../practice.py) 实现 `run_agent`。每次调用单独构造历史，在 `for _ in range(max_steps)` 中调用一次模型。变量名 `_` 表示本段代码不读取计数值。遇到 final 立即 `return`。遇到 call 就调用工具并复用 `record_call(history, action, result)`。该辅助函数修改传入的列表，返回 `None`。遇到其他动作抛 `ValueError`；预算耗尽抛 `RuntimeError`，让最外层决定怎样展示。
-
-```bash
-python check.py 4
-python -m agent_lab --practice 安静
-python -m agent_lab --practice 海滩
+```text
+模型轮数已用尽
+['search_places']
 ```
 
-第二条应返回两个地点，第三条应返回 `没有找到地点`。暂时在 `action = model(history)` 前打印 `[m["role"] for m in history]`，再运行一次，然后移除打印。观察是否和上表的两个输入快照一致。
+`max_steps=1` 允许模型决策一次。它请求查地点，工具照常执行，但预算已经没有第二次模型调用可以生成最终文本。这个实验也解释了一个工程问题：从外层看到“调用失败”，不能直接推断工具从未执行。重试看重的是实际执行记录，尤其当工具将来会产生写操作时。
 
-## 48–60 分钟 · 入门结业挑战
+## 写出自己的同步运行器
 
-从一个空白页写出 `fn = TOOLS[name]` 前后两步，以及 `action["arguments"]` 在哪一层从字符串变成对象。再用 `run_agent("安静", max_steps=1)` 制造一次失败：此时工具可能已执行，最终回答还未生成。由此解释为何不能用“模型轮数耗尽”推断“工具没有执行”。最后把模型改成直接回答，确认相同预算能得到最终文本。
+在 `practice.py` 完成 `run_agent`，为每次请求创建新的历史。保留传入的 `model` 和 `tool`，这样测试才可以替换它们。看到 `Tool | None = None` 时，竖线表示值允许是工具或 `None`，等号表示省略实参时使用 `None`。`record_call` 会就地修改列表，不必把返回值赋回 `history`。
 
-遇到 `from .core import ...` 时，点表示从当前包解析模块。直接运行包内单文件可能缺少父包上下文，首页给出的 `-m` 命令会建立它。到这里，你已能读懂下一课会复用的同步逻辑。
-
-[参考实现 · run_agent 与 record_call](../agent_lab/core.py) · [Python 教程 · 模块](https://docs.python.org/zh-cn/3.12/tutorial/modules.html)
+执行 `python check.py 4` 和 `python -m agent_lab --practice 安静`。再把查询词换成「海滩」，预测工具消息中的 `ok`、`items` 和最终文本，然后用上面的逐行脚本核对。两个地点来源如果都要等待网络，循环最花时间的一步将变成等工具返回，这就是下一课的起点。[运行器源码](../agent_lab/core.py) · [练习文件](../practice.py) · [下一课：并发等待](05-async.md)

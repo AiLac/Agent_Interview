@@ -1,67 +1,73 @@
-# Java 开发者的 Agent Python 课
+# 跟着一次工具调用学 Python
 
-**目标是拿到一段 Python Agent 源码，能沿着一次请求找到四件事：谁构造消息、谁选择工具、谁真正执行、结果怎样回到下一轮。** 你已经会 Java 后端开发，可以直接从一次调用进入语言细节。6 小时完成一个能运行的例子；有 7 或 8 小时，再加上调用记录与故障回放。
+在终端里输入「安静」，屏幕上会出现「青禾自习室、北岸图书馆」。如果把同一份程序切到流式模式，你还会看见它先报告准备调用哪个工具，再报告查到了什么，最后才给出这句话。**这两个地点最早出现在哪一步？模型又是在哪一步读到它们的？** 这门课用一个可以逐行运行的 Python 程序回答这两个问题。
 
-案例使用虚构地点。输入「安静」，本地模型替身发出一次 `search_places` 请求，Python 执行工具，模型替身读取结果后给出「青禾自习室、北岸图书馆」。进阶版同时查询两个模拟来源，终端可以在调用完成前先收到开始事件。所有代码使用 **Python 3.12 标准库**，可断网运行。动作字段是本课程的教学格式，真实模型 SDK 或 MCP 的消息格式需单独适配。
+课程适合熟悉 Java、初次读 Python Agent 源码的开发者。OpenAI 的《深入解析 Codex 智能体循环》先画出一次交互的全貌，再打开模型每一轮收到的输入，解释一次请求怎样变成下一次请求。这里沿用这种叙述顺序，案例、代码与练习均来自本仓库。地点是虚构数据，模型由按固定规则返回动作的本地函数扮演，工具由 Python 代码实际执行。全程只需 Python 3.12 标准库。[参考文章](https://openai.com/zh-Hans-CN/index/unrolling-the-codex-agent-loop/)
 
-## 先学哪些 Python
+## 一次查询由谁完成
 
-| 掌握到什么程度 | 语法与概念 | 对应的 Agent 工作 |
-| --- | --- | --- |
-| 能独立写 | 缩进、赋值、字符串、真值、`if/for/return`、`list/dict/set`、切片与推导式 | 构造消息、提取工具名、筛选结果 |
-| 能独立写 | 函数对象、默认值、关键字传参、`* / **` 的不同位置、模块导入、JSON、异常 | 用工具名找到函数，解析模型参数，把错误传给下一轮 |
-| 能读懂并修改 | 类型提示、`None`、类与实例、`self`、`@dataclass`、`Callable` | 看懂 SDK 签名，区分消息字典、参数对象、模型回调 |
-| 进阶必修 | 协程、可等待对象、`gather`、超时、`yield`、`async for` | 并发等待工具，按事件输出进度和最终答案 |
-| 按时间选修 | 闭包、装饰器、`@wraps`、`__call__`、迭代器、`unittest` | 读懂工具装饰器，给每次调用留记录，离线复现多轮失败 |
+先把 **模型** 理解为接收消息、给出下一步动作的函数。**工具** 是干具体工作的函数，例如根据标签查询地点。**运行器** 是连接两者的 Python 程序，它持有一份按发生顺序排列的消息列表，称为**历史**。在这个例子里，模型只能从收到的历史中读取查询结果。
 
-元类、描述符内部实现、多进程调优和模型训练可以留到遇到具体代码再学。阅读含 `@tool`、`async def` 的框架代码，先找到原函数签名、包装它的函数、消费结果的调用方，这三个位置通常能解释执行时机。
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant R as Python 运行器
+    participant M as 本地模型替身
+    participant T as 地点工具
+    U->>R: 安静
+    R->>M: 用户消息
+    M-->>R: 请求调用 search_places
+    R->>T: 查询安静的地点
+    T-->>R: 两个地点
+    R->>M: 用户消息、调用记录、工具结果
+    M-->>R: 最终文本
+    R-->>U: 青禾自习室、北岸图书馆
+```
 
-## 课表与交付物
+现在可以回答第一个问题了。两个地点最早出现在工具的结果里。直到运行器把结果写进历史，再次调用模型，模型才有足够的信息给出最终文本。第 1–4 课会把图里的每一条关键消息落实成一个能在调试器里看到的值。
 
-| 小时 | 讲义 | 当小时写出来的东西 |
-| --- | --- | --- |
-| 1 · 入门 | [从 PowerShell 启动程序，构造消息](lessons/01-messages.md) | `make_message`，能判断两条消息是否意外共享对象 |
-| 2 · 入门 | [读懂嵌套数据和推导式](lessons/02-collections.md) | `find_places`，能解释过滤、保序、截断的顺序 |
-| 3 · 入门 | [把 JSON 请求分派给 Python 函数](lessons/03-tools.md) | `dispatch`，区分空结果、非法参数、未知工具 |
-| 4 · 入门 | [把一次工具调用接回模型](lessons/04-loop.md) | `run_agent`，能追踪调用 ID，给模型设置轮数上限 |
-| 5 · 进阶必修 | [并发等待两个工具来源](lessons/05-async.md) | `lookup_sources`，一个来源超时时保留另一个的结果 |
-| 6 · 进阶必修 | [逐步消费 Agent 事件](lessons/06-stream.md) | `stream_agent`，用 `async for` 依次看到请求、观察、回答 |
-| 7 · 进阶选修 | [拆开装饰器，记录工具执行](lessons/07-decorators.md) | `observe`，透传实参、返回值与异常 |
-| 8 · 进阶选修 | [用回放模型复现工具错误](lessons/08-replay.md) | `ReplayModel`，写断言检查模型实际收到的观察 |
+## 从终端观察这次查询
 
-**6 小时**顺序完成 1–6。**7 小时**在此前提下加第 7 或第 8 课，两课彼此独立。**8 小时**全部完成。每行 60 分钟，包含阅读、动手、调试和自测。首次安装解释器的下载时间另计。
-
-## 从这里启动
-
-在仓库根目录打开 Windows PowerShell。已有 Python 3.12 的情况下，以下命令不需要下载依赖，也无需激活脚本。
+在仓库根目录打开终端。Windows PowerShell 可逐行执行下面的命令。`py -0p` 列出已安装解释器及路径，`-3.12` 选定版本，`venv` 在当前目录建立专用环境。
 
 ```powershell
 cd python
 py -0p
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m agent_lab 安静
-.\.venv\Scripts\python.exe check.py --reference
+.\.venv\Scripts\python.exe -m agent_lab --stream 安静
 ```
 
-macOS / Linux 使用下列命令。
+macOS / Linux 的对应命令如下。
 
 ```bash
 cd python
 python3.12 -m venv .venv
 .venv/bin/python -m agent_lab 安静
-.venv/bin/python check.py --reference
+.venv/bin/python -m agent_lab --stream 安静
 ```
 
-第一个程序应输出 `青禾自习室、北岸图书馆`，第二个命令末尾应显示 `OK`。各讲义为了简洁统一写 `python`。如果未激活环境，在 Windows 上将其替换为 `.\.venv\Scripts\python.exe`，在 macOS / Linux 上替换为 `.venv/bin/python`。以下命令的工作目录始终是仓库内的 `python/`。
+第一条运行命令只打印最终文本。第二条打印三行 JSON，依次带有 `tool_call`、`tool_result`、`final`。它们分别表示准备执行、已拿到结果、可以结束。第 6 课会让程序在第一行和第二行之间停下来，看看此时工具究竟执行了几次。
 
-## 怎样练，怎样知道自己学会了
+下文的工作目录都是仓库里的 `python/`。讲义把解释器简写为 `python`，你可以直接换成上面对应的虚拟环境路径。各节的 Python 代码框都能单独复制到该目录下的临时 `.py` 文件运行。紧跟代码框的输出可用来逐项核对。
 
-1. 每课先预测小例子的输出，再运行。讲义中的独立 Python 片段可在交互解释器或临时脚本中执行。标注“签名”“节选”“骨架”的代码用于对照，完整上下文在相应源码里。
-2. 在 [practice.py](practice.py) 完成当小时的同名函数。运行 `python check.py 1` 检查第 1 课，数字可以换成 1–8。未作答时出现 `NotImplementedError` 是起始状态。H03 的工具表会调用你在 H02 写的函数。
-3. 卡住时先看检查器里的具体输入与预期值，再对照参考实现。带 `--reference` 的命令检查参考答案；检查自己的代码时去掉该参数。[逐课检查器](check.py) · [入门参考](agent_lab/core.py) · [进阶必修参考](agent_lab/advanced.py) · [选修参考](agent_lab/extra.py)
-4. 完成第 4 课后运行 `python -m agent_lab --practice 安静`。完成第 6 课后运行 `python -m agent_lab --practice --stream 安静`。去掉 `--practice` 可随时观察参考程序。课程把终端参数解析放在 [__main__.py](agent_lab/__main__.py)。
-5. 最后换一个输入，例如「海滩」。如果输出「没有找到地点」，从工具观察里的 `ok` 和 `items` 解释这是怎样产生的。再临时让模型永远发起工具调用，解释哪个函数终止循环。能够从外部行为定位到代码，才算完成这次练习。
+## 六到八小时怎么学
 
-**常见环境问题。** 出现 `No module named agent_lab` 时先看当前目录是否包含 `agent_lab/`。出现相对导入错误时用 `python -m agent_lab` 启动包。IDEA 与终端行为不一致时分别打印 `sys.executable`，将项目解释器指向同一个虚拟环境。以后要安装 SDK，可以用同一解释器执行 `python -m pip install 包名`。
+| 阶段 | 文章 | 借这个问题学会的 Python |
+| --- | --- | --- |
+| 入门 · 第 1 小时 | [「安静」怎样变成第一条消息](lessons/01-messages.md) | 字符串、函数、缩进、字典、列表、对象引用 |
+| 入门 · 第 2 小时 | [三个候选地点为何只返回两个](lessons/02-collections.md) | 遍历、成员判断、切片、推导式、关键字参数 |
+| 入门 · 第 3 小时 | [工具名怎样找到一段可执行代码](lessons/03-tools.md) | JSON、函数对象、参数校验、数据类与异常 |
+| 入门 · 第 4 小时 | [为什么只问了一次，模型却运行两轮](lessons/04-loop.md) | 回调、类型提示、循环与提前返回 |
+| 进阶 · 第 5 小时 | [一个线程怎样同时等待两份查询](lessons/05-async.md) | 协程、事件循环、调度、超时、阻塞 I/O |
+| 进阶 · 第 6 小时 | [收到第一条事件时，工具执行了吗](lessons/06-stream.md) | 生成器、暂停与恢复、异步迭代 |
+| 选修 · 第 7 小时 | [工具多了一层日志，原函数去了哪里](lessons/07-decorators.md) | 闭包、装饰器、实参转发、异常传播 |
+| 选修 · 第 8 小时 | [最终回答相同，怎样找出中间的错误](lessons/08-replay.md) | 可调用对象、迭代器、文件上下文与回放测试 |
 
-系统查阅入口：[Python 3.12 中文教程](https://docs.python.org/zh-cn/3.12/tutorial/)。
+**有 6 小时**，完成前六课，就能自己实现同步循环和流式版本。**有 7 小时**，想读工具注册源码可加第 7 课，想做失败案例复现可直接加第 8 课。**有 8 小时**，按顺序读完。每课预算约 20 分钟跟读与运行、30 分钟独立实现与调试、10 分钟用新输入自测。首次安装解释器的时间另计。
+
+## 把读过的代码变成自己的实现
+
+每课末尾都有一个与正文对应的练习。先运行文中的短程序，再打开 `practice.py`，找到当课的函数并替换 `raise NotImplementedError(...)`。例如，第 1 课完成后运行 `python check.py 1`，给命令加上 `--reference` 就能对同一组输入检查参考实现。第 3 课的成功查询会用到自己在第 2 课写的筛选函数。[练习文件](practice.py) · [逐课检查](check.py)
+
+写完第 4 课，用 `python -m agent_lab --practice 安静` 跑自己的同步程序。写完第 6 课，用 `python -m agent_lab --practice --stream 安静` 看自己的三个事件。若想先复现参考行为，去掉 `--practice`。报 `No module named agent_lab` 时检查当前目录是否含 `agent_lab/`。若 IDEA 和终端结果不同，在两边分别运行 `import sys; print(sys.executable)` 核对解释器路径。[命令行入口](agent_lab/__main__.py) · [同步实现](agent_lab/core.py) · [异步实现](agent_lab/advanced.py) · [选修实现](agent_lab/extra.py)

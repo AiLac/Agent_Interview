@@ -1,60 +1,78 @@
-# 第 3 小时 · 从一段 JSON 找到要执行的函数
+# 第 3 小时 · 工具名怎样找到一段可执行代码
 
-**本节产物**是 `dispatch(name, raw)`。假设模型生成工具名 `search_places`，同时生成一段 JSON 字符串。运行器需要把它转换成 Python 可用的参数，找到已登记的函数，并把成功或失败组织成下一轮可读取的观察。
+用户输入「安静」，模型给运行器的第一份响应里没有任何地点。它给了一个工具名和一段参数文本。可以把这件事类比成收到一个 RPC 请求：有人说明想调用哪个方法、传什么参数，服务端还得找到实现并真正执行。Python 在这里有个很方便的特性，函数本身可以作为值放进字典。
 
-## 0–12 分钟 · 分清传输文本和内存对象
+## 看看模型究竟交来了什么
+
+```python
+from agent_lab.core import demo_model, make_message
+
+action = demo_model([make_message("user", "安静")])
+print(action["kind"], action["name"], action["id"])
+print(type(action["arguments"]).__name__, action["arguments"])
+```
+
+```text
+call search_places c1
+str {"query": "安静"}
+```
+
+`call` 告诉运行器下一步执行工具，`c1` 标记这一次调用。最容易看错的是第二行：终端打印的内容长得像一个对象，而 `type(...).__name__` 显示，Python 此刻拿到的是字符串。`raw["query"]` 对字符串无效；只有把里面的 JSON 解析出来，才能按字段取值。课程采用这个简化的动作格式，接入具体 SDK 时要看它交回的是文本还是已解析对象。
 
 ```python
 import json
+from agent_lab.core import parse_args
 
-raw = '{"query":"安静","limit":1}'
-args = json.loads(raw)
-print(type(raw).__name__, type(args).__name__, args["limit"] + 1)
-print(json.dumps({"ok": True, "items": []}, ensure_ascii=False))
+raw = '{"query":" 安静 ","limit":1}'
+data = json.loads(raw)
+args = parse_args(raw)
+print(type(data).__name__, repr(data["query"]))
+print(type(args).__name__, repr(args.query), args.limit)
 ```
 
-第一行输出是 `str dict 2`。Java 中用 Jackson 从字符串读取对象，在这里对应 `json.loads`。反向用 `dumps` 得到字符串；输出里 Python 的 `True` 会变成 JSON 的 `true`。读取已打开的文件则用 `json.load(file)`。实际 SDK 有的给你字符串，有的已经提供字典。先看返回值的形状，重复反序列化会得到 `TypeError`。
+```text
+dict ' 安静 '
+SearchArgs '安静' 1
+```
 
-在解释器里单独对 `json.loads("{")` 求值，读 traceback 的最后一行，再向上找调用位置。`JSONDecodeError` 属于 `ValueError`，本课用一次 `except ValueError` 处理 JSON 语法错误与参数值错误。它只包住参数解析，避免工具内部真正的代码错误被记录成“用户参数非法”。
+`json.loads` 类似用 Jackson 读 JSON 文本，它保留了查询词中的空格。`parse_args` 内部也做解析，但还会检查键、类型与范围，然后去掉空格，构造 `SearchArgs`。`repr` 把字符串连同引号一起显示，便于观察空格。过了这一层边界，调用方可以用属性 `args.query` 读取已经检查过的词。逆方向的 `json.dumps` 会从内存对象生成文本，第 4 课存工具消息时会用到它。
 
-## 12–28 分钟 · 读懂边界校验和参数对象
+## 为什么解析成功还要检查类型
 
-打开 [core.py](../agent_lab/core.py) 中的 `SearchArgs` 和 `parse_args`。按执行顺序给下面的输入标注“会走到哪一行”。
+下面两份输入都符合 JSON 语法。第一个请求省略上限，课程约定默认返回两条。第二个请求把上限写成了布尔值。它也能解析成功，但用来指定地点数量就失去了含义。
 
-| 原始字符串 | 解析后的对象 | 校验结果 |
-| --- | --- | --- |
-| `{"query":" 安静 "}` | 字典 | `SearchArgs(query="安静", limit=2)` |
-| `[]` | 列表 | 期望对象，拒绝 |
-| `{"query":"安静","limit":true}` | 字典，limit 为布尔值 | 期望整数，拒绝 |
-| `{"query":"安静","limti":1}` | 字典，有未知键 | 拒绝拼错的键 |
+| 原始参数 | 运行器怎样处理 |
+| --- | --- |
+| `{"query":"安静"}` | 使用默认 `limit=2` |
+| `{"query":"安静","limit":true}` | 返回 `invalid_args`；`true` 转换成了 Python 的 `True` |
+| `{"query":"安静","limti":1}` | 返回 `invalid_args`；出现了未声明的键 |
+| `{"query":"海滩"}` | 正常执行，得到空列表 |
 
-`set(args) - {"query", "limit"}` 取未知键集合。前面的 `or` 短路，非字典输入直接进入错误分支。`1 <= limit <= 5` 表示两个边界都成立。Python 中 `isinstance(True, int)` 为真，所以例子用 `type(limit) is int` 严格区分两者。
+打开 `parse_args`，`set(args)` 把字典的键收集成集合，减去 `{"query", "limit"}` 后剩下的就是多出来的键。`type(limit) is int` 要求恰好为整数类型。这样写有一个具体原因：Python 中 `isinstance(True, int)` 为真，这里希望把布尔值拒绝掉。校验后的 `SearchArgs` 用 `@dataclass(frozen=True)` 声明，Python 帮它生成初始化方法等常用代码，并限制给已有实例的字段重新赋值。可以把这个简单参数对象对应到 Java record。字段类型提示本身不会替程序检查 JSON。[校验器与数据类源码](../agent_lab/core.py)
 
-`@dataclass(frozen=True)` 帮类生成按字段初始化等方法。可以暂时把这个简单对象读成 Java record：`args.query` 和 `args.limit` 是属性。构造器接受类型标注并不等于自动验证外部输入，可以直接试 `SearchArgs("安静", "错")`。本例把校验集中在 `parse_args`，随后才构造参数对象。
-
-读 SDK 参数签名时还会看到三种常用写法。`list[str]` 表示元素应是字符串，`dict[str, int]` 表示键和值的预期类型。`limit: int | None` 表示允许整数或 None；是否能省略这个形参，要看它有没有默认值。例如 `def f(limit: int | None): ...` 仍需传参，而 `def f(limit: int | None = None): ...` 可以直接调用 `f()`。试在解释器里各调用一次，观察哪一步抛出 `TypeError`。
-
-## 28–48 分钟 · 把函数作为值传递
+## 从函数名到一次实际调用
 
 ```python
-from agent_lab.core import local_search
+from agent_lab.core import TOOLS, dispatch
 
-registry = {"search_places": local_search}
-fn = registry["search_places"]
-print(fn("安静", limit=1))
+fn = TOOLS["search_places"]
+print(fn.__name__)
 print(fn(**{"query": "安静", "limit": 1}))
+print(dispatch("search_places", '{"query":"海滩"}'))
+print(dispatch("missing", "{}"))
 ```
 
-表中存的是函数对象，写成 `local_search()` 会在建表时就尝试执行。赋值给 `fn` 后，用括号才调用。第二种写法中调用端的 `**` 按键展开为关键字参数；键名要和形参对应。真实工具可以通过注册表限制可执行的函数，不应直接根据输入文本执行 Python 表达式。
+```text
+local_search
+['青禾自习室']
+{'ok': True, 'items': []}
+{'ok': False, 'error': 'unknown_tool'}
+```
 
-在 [practice.py](../practice.py) 实现 `dispatch`：
+第一行中的 `fn` 绑定到函数对象。在建表时写 `local_search` 可以保存这个函数，以后再传参数。写 `local_search(...)` 则会当场执行，并把返回值放入字典。到了 `fn(...)` 才真正发起本次查询。调用端的 `**` 按键展开字典，等价于 `fn(query="安静", limit=1)`。真实入口 `dispatch` 使用校验完的属性传参。
 
-1. `TOOLS.get(name)` 查不到时返回 `{"ok": False, "error": "unknown_tool"}`。
-2. 调用提供的 `parse_args(raw)`。抛出 `ValueError` 时返回 `{"ok": False, "error": "invalid_args"}`。
-3. 向函数传入已校验的查询词和上限。即使列表为空也返回 `{"ok": True, "items": 结果列表}`。运行 `python check.py 3`。
+把工具不认识、参数不合法、合法查询零命中看成三条执行路径，就能解释为什么结果里需要 `ok`。运行器通过 `TOOLS.get(name)` 找到函数，查不到时得到 `None` 并返回 `unknown_tool`。只有校验器周围的 `try/except ValueError` 会把错误变成 `invalid_args`。工具本身如果抛编程错误，仍能在 traceback 中看到实际出错位置。
 
-## 48–60 分钟 · 用三个相似请求做排错
+## 把一次失败定位到一行
 
-保持工具名不变，依次传 `'{"query":"海滩"}'`、`'{"query":""}'` 和 `'{"query":"安静","limit":"1"}'`。第一个请求成功执行，后两个应在执行地点查询前结束。然后只把第一个请求的工具名改为 `search_place`，观察错误码如何变化。能指出“哪一步决定不调用函数”，比记住异常名称更有用。
-
-[参考实现 · parse_args 与 dispatch](../agent_lab/core.py) · [Python 教程 · 错误与异常](https://docs.python.org/zh-cn/3.12/tutorial/errors.html) · [标准库 · dataclasses](https://docs.python.org/zh-cn/3.12/library/dataclasses.html)
+在 `practice.py` 写出 `dispatch`，复用 `TOOLS` 和 `parse_args`，运行 `python check.py 3`。另外准备一个合法请求，先把工具名改错，再把名字改回去、把原始参数删掉最后一个右花括号。前者在查表时就结束；后者进入解析器后才失败。如果在地点函数第一行打断点，这两次都不会停在那里。现在把工具名和参数都修好，下一课就能看到结果如何被交给模型。[练习文件](../practice.py) · [下一课：第二轮模型调用](04-loop.md)
